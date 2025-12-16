@@ -3,6 +3,7 @@ use anyhow::Result;
 use scraper::{Html, Selector};
 use crate::model::{ScrapeConfig, SpoonOutput, CodeBlock};
 use crate::strategy::SpoonStrategy;
+use crate::browser::fetch_page_headless;
 
 pub struct GenericStrategy;
 
@@ -13,8 +14,21 @@ impl SpoonStrategy for GenericStrategy {
     }
 
     async fn execute(&self, url: &str, config: &ScrapeConfig) -> Result<SpoonOutput> {
-        let resp = reqwest::get(url).await?;
-        let html_content = resp.text().await?;
+        // Fast path: reqwest
+        let mut html_content = match reqwest::get(url).await {
+            Ok(resp) => resp.text().await.unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+
+        // Slow path: Headless if content is small or explicitly requested
+        if config.render_js || html_content.len() < 500 {
+            // Log or debug here if possible
+            if let Ok(headless_content) = fetch_page_headless(url).await {
+                html_content = headless_content;
+            } else if html_content.is_empty() {
+                 return Err(anyhow::anyhow!("Failed to fetch content via both methods"));
+            }
+        }
 
         let document = Html::parse_document(&html_content);
         let title_selector = Selector::parse("title").unwrap();

@@ -1,49 +1,67 @@
 use clap::Parser;
 use rustyspoon::model::ScrapeConfig;
-use rustyspoon::strategies::generic::GenericStrategy;
-use rustyspoon::strategy::SpoonStrategy;
+use rustyspoon::strategies::get_strategy;
+use rustyspoon::server::run_server;
 use anyhow::Result;
+use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// URL to scrape
-    url: String,
+    /// URL to scrape. If not provided, starts server (or use --server flag).
+    /// Made optional to allow running as server without URL.
+    #[arg(required_unless_present = "server")]
+    url: Option<String>,
 
     /// Extract code blocks into separate JSON array
     #[arg(long, default_value_t = true)]
     extract_code: bool,
 
-    /// Use headless browser (not implemented in Phase 1)
+    /// Use headless browser
     #[arg(long, default_value_t = false)]
     render_js: bool,
 
     /// Output full JSON response
     #[arg(long, default_value_t = false)]
     json: bool,
+
+    /// Run as API server
+    #[arg(long)]
+    server: bool,
+
+    /// Bind address for server
+    #[arg(long, default_value = "0.0.0.0:4000")]
+    bind: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let config = ScrapeConfig {
-        extract_code_blocks: args.extract_code,
-        render_js: args.render_js,
-    };
+    if args.server {
+        let addr: SocketAddr = args.bind.parse().expect("Invalid bind address");
+        run_server(addr).await;
+        return Ok(());
+    }
 
-    // Strategy resolution (simple for Phase 1)
-    let strategy = GenericStrategy;
+    if let Some(url) = args.url {
+        let config = ScrapeConfig {
+            extract_code_blocks: args.extract_code,
+            render_js: args.render_js,
+        };
 
-    if strategy.can_handle(&args.url) {
-        let output = strategy.execute(&args.url, &config).await?;
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&output)?);
+        let strategy = get_strategy(&url);
+
+        if strategy.can_handle(&url) {
+            let output = strategy.execute(&url, &config).await?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!("{}", output.markdown_content);
+            }
         } else {
-            println!("{}", output.markdown_content);
+            eprintln!("No strategy found for URL: {}", url);
         }
-    } else {
-        eprintln!("No strategy found for URL: {}", args.url);
     }
 
     Ok(())
